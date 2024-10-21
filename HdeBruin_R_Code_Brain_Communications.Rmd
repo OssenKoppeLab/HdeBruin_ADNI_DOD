@@ -292,7 +292,7 @@ t.test(time_lag_TBI_tau_PET ~ TBI_status, data = tmp_data)
 
 ```
 
-# load relevant data files for supplementary table 1
+# load relevant data files for supplementary table 1 (PTSD status was already previously combined with PET data, so already present)
 
 ```{r}
 
