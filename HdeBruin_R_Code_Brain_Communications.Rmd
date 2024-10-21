@@ -1,0 +1,2021 @@
+---
+title: "ADNI DOD analyses"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+# load libraries
+
+```{r}
+
+library(lubridate)
+library(readxl)
+library(writexl)
+library(dplyr)
+library(plyr)
+library(stringr)
+library(ggplot2)
+library(ggdist)
+library(cowplot)
+library(tableone)
+library(data.table)
+library(ciftiTools)
+library(ggpubr)
+library(rstatix)
+
+```
+
+# read in tau dataset
+
+```{r}
+
+sdir = "C:/"
+
+ADNI_df_tau <- read_xlsx(paste0(sdir, "ADNI_df_tau.xlsx")) 
+
+ADNI_df_tau$TBI_status <- as.factor(ADNI_df_tau$TBI_status)
+
+names(ADNI_df_tau)[names(ADNI_df_tau) == "DXCHANGE_tau"] <- "cognitive_status_tau"
+names(ADNI_df_tau)[names(ADNI_df_tau) == "PTGENDER"] <- "sex"
+names(ADNI_df_tau)[names(ADNI_df_tau) == "PTEDUCAT"] <- "education_yrs"
+
+ADNI_df_tau$APOE_status <- paste(ADNI_df_tau$APGEN1, ADNI_df_tau$APGEN2, sep = "_")
+
+names(ADNI_df_tau)[names(ADNI_df_tau) == "tau_global_SUVR_Sch200"] <- "tau_global"
+
+```
+
+# read in amyloid dataset
+
+```{r}
+
+ADNI_df_amy <- read_xlsx(paste0(sdir, "ADNI_df_amy.xlsx")) 
+
+names(ADNI_df_amy)[names(ADNI_df_amy) == "DXCHANGE_amy"] <- "cognitive_status_amy"
+
+names(ADNI_df_amy)[names(ADNI_df_amy) == "amyloid_status_DK"] <- "amyloid_status"
+names(ADNI_df_amy)[names(ADNI_df_amy) == "amy_global_SUVR_DK"] <- "amyloid_global"
+
+```
+
+# merge tau dataset with amyloid dataset
+
+```{r}
+
+ADNI_df_tau_amy <- merge(ADNI_df_tau, ADNI_df_amy, by=c("SCRNO"), all.x=T)
+
+ADNI_df_tau_amy$difftime_tau_amy <- difftime(ADNI_df_tau_amy$Tau_PET_date, ADNI_df_tau_amy$Amyloid_PET_date, units = "weeks")
+
+ADNI_df <- ADNI_df_tau_amy
+
+ADNI_df <- subset(ADNI_df, sex == 1)
+
+ADNI_df$cognitive_status_amy <- mapvalues(ADNI_df$cognitive_status_amy, c("1", "2"), c("CN", "MCI"), warn_missing = TRUE)
+ADNI_df$cognitive_status_tau <- mapvalues(ADNI_df$cognitive_status_tau, c("1", "2"), c("CN", "MCI"), warn_missing = TRUE)
+
+ADNI_df$sex <- mapvalues(ADNI_df$sex, c(1), c("Male"), warn_missing = TRUE)
+
+ADNI_df$PTETHCAT <- as.character(ADNI_df$PTETHCAT)
+ADNI_df$PTRACCAT <- as.character(ADNI_df$PTRACCAT)
+ADNI_df$PTSDCRIT <- as.character(ADNI_df$PTSDCRIT)
+
+ADNI_df$TBI_status <- mapvalues(ADNI_df$TBI_status, c(0, 1, 2), c("No_TBI", "Mild_TBI", "Moderate_severe_TBI"), warn_missing = TRUE)
+
+ADNI_df$TBI_yn <- mapvalues(ADNI_df$TBI_yn, c(0, 1), c("No_TBI", "TBI"), warn_missing = TRUE)
+
+ADNI_df$APOE_status <- mapvalues(ADNI_df$APOE_status, c("2_3"), c("e2e3"), warn_missing = TRUE)
+ADNI_df$APOE_status <- mapvalues(ADNI_df$APOE_status, c("2_4"), c("e2e4"), warn_missing = TRUE)
+ADNI_df$APOE_status <- mapvalues(ADNI_df$APOE_status, c("3_3"), c("e3e3"), warn_missing = TRUE)
+ADNI_df$APOE_status <- mapvalues(ADNI_df$APOE_status, c("3_4"), c("e3e4"), warn_missing = TRUE)
+ADNI_df$APOE_status <- mapvalues(ADNI_df$APOE_status, c("NA_NA"), c(NA), warn_missing = TRUE)
+
+ADNI_df$time_lag_tau_amyloid_PET <- difftime(ADNI_df$Tau_PET_date, ADNI_df$Amyloid_PET_date, units = "weeks")
+
+ADNI_df$time_lag_tau_PET_diagnosis <- difftime(ADNI_df$Tau_PET_date, ADNI_df$EXAMDATE_diag_tau, units = "weeks")
+
+ADNI_df$time_lag_amyloid_PET_diagnosis <- difftime(ADNI_df$Amyloid_PET_date, ADNI_df$EXAMDATE_diag_amy, units = "weeks")
+
+ADNI_df$APOE4_carrier <- mapvalues(ADNI_df$APOE_status, from=c("e2e3", "e2e4", "e3e3", "e3e4"), to=c(0,1,0,1))
+
+ADNI_df$APOE_status <- ADNI_df$APOE4_carrier
+
+```
+
+# establish TBI year and age
+
+```{r}
+
+Participants <- read_excel("C:/Participants.xlsx")
+
+RECTBINJ <- read.csv("C:/RECTBIINJ.csv")
+
+RECTBINJ_subset <- RECTBINJ[, c("SCRNO", "TBINJAGE", "TBINJYEAR")]
+
+RECTBINJ_subset <- subset(RECTBINJ_subset, SCRNO %in% Participants$SCRNO)
+
+RECTBINJ_subset2 <- RECTBINJ_subset %>%
+  group_by(SCRNO) %>%
+  filter(TBINJYEAR == max(TBINJYEAR)) %>%
+  distinct(SCRNO, TBINJYEAR, .keep_all = TRUE) %>%
+  ungroup()
+
+ADNI_df <- merge(ADNI_df, RECTBINJ_subset2, by = "SCRNO", all.x = TRUE)
+
+ADNI_df$Tau_PET_year <- year(ADNI_df$Tau_PET_date)
+
+ADNI_df$Amyloid_PET_year <- year(ADNI_df$Amyloid_PET_date)
+
+ADNI_df$time_lag_TBI_tau_PET <- as.numeric(ADNI_df$Tau_PET_year - ADNI_df$TBINJYEAR)
+ADNI_df$time_lag_TBI_amyloid_PET <- as.numeric(ADNI_df$Amyloid_PET_year - ADNI_df$TBINJYEAR)
+
+```
+
+# prepare table 1
+
+```{r}
+
+ADNI_df$time_lag_amyloid_PET_diagnosis <- as.numeric(ADNI_df$time_lag_amyloid_PET_diagnosis)
+ADNI_df$time_lag_tau_PET_diagnosis <- as.numeric(ADNI_df$time_lag_tau_PET_diagnosis)
+ADNI_df$time_lag_tau_amyloid_PET <- as.numeric(ADNI_df$time_lag_tau_amyloid_PET)
+
+ADNI_df$PTRACCAT <- mapvalues(ADNI_df$PTRACCAT, from=c(1, 4, 5, 6, 7), to=c("American Indian or Alaskan Native", "Black or African American", "White", "More than one race", "Unknown"))
+
+weeks_per_year <- 52.1775
+
+ADNI_df$time_lag_amyloid_PET_diagnosis <- ADNI_df$time_lag_amyloid_PET_diagnosis / weeks_per_year
+ADNI_df$time_lag_tau_PET_diagnosis <- ADNI_df$time_lag_tau_PET_diagnosis / weeks_per_year
+ADNI_df$time_lag_tau_amyloid_PET <- ADNI_df$time_lag_tau_amyloid_PET / weeks_per_year
+
+ADNI_df$TBI_Vietnam <- ADNI_df$TBWHINJ
+ADNI_df$race <- ADNI_df$PTRACCAT
+ADNI_df$cognitive_diagnosis <- ADNI_df$cognitive_status_tau
+
+ADNI_df$TBI_Vietnam <- ifelse(ADNI_df$TBI_status == "No_TBI", NA, ADNI_df$TBI_Vietnam)
+ADNI_df$TBI_frequency <- ifelse(ADNI_df$TBI_status == "No_TBI", NA, ADNI_df$TBI_frequency)
+
+```
+
+# create table 1
+
+```{r}
+
+vars_tableone <- c("Age_Tau_PET",
+            "sex",
+            "education_yrs",
+            "race",
+            "APOE4_carrier",
+            "cognitive_diagnosis",
+            "TBI_Vietnam",
+            "TBI_frequency",
+            "amyloid_global",
+            "tau_global",
+            "time_lag_tau_amyloid_PET",
+            "time_lag_TBI_tau_PET")
+catVars <- c("sex", "APOE4_carrier", "race", "cognitive_diagnosis", "TBI_frequency", "TBI_Vietnam") 
+
+table1 <- tableone::CreateTableOne(vars = vars_tableone, strata = c("TBI_status"), 
+                                             data = ADNI_df, factorVars = catVars, addOverall = TRUE)
+
+```
+
+# compare demographics between groups for table 1
+
+```{r}
+
+## age tau PET
+
+table1(~ (Age_Tau_PET) | TBI_status, data = ADNI_df)
+tmp.aov <- aov(ADNI_df$Age_Tau_PET ~ ADNI_df$TBI_status)
+summary(tmp.aov)
+TukeyHSD(tmp.aov)
+
+## education
+
+table1(~ (education_yrs) | TBI_status, data = ADNI_df)
+tmp.aov <- aov(ADNI_df$education_yrs ~ ADNI_df$TBI_status)
+summary(tmp.aov)
+TukeyHSD(tmp.aov)
+
+## race
+
+table1(~ factor(race) | TBI_status, data = ADNI_df)
+
+table <- table(ADNI_df$race, ADNI_df$TBI_status)
+result <- fisher.test(table)
+
+fisher.test(table[,c("No_TBI","Mild_TBI")])
+fisher.test(table[,c("No_TBI","Moderate_severe_TBI")])
+fisher.test(table[,c("Mild_TBI","Moderate_severe_TBI")])
+
+pairwise_fisher_test(as.matrix(table), p.adjust.method = "fdr")
+
+## APOE status
+
+table1(~ factor(APOE4_carrier) | TBI_status, data = ADNI_df)
+
+table <- table(ADNI_df$APOE4_carrier, ADNI_df$TBI_status)
+result <- chisq.test(table)
+
+chisq.test(table[,c("No_TBI","Mild_TBI")])
+chisq.test(table[,c("No_TBI","Moderate_severe_TBI")])
+chisq.test(table[,c("Mild_TBI","Moderate_severe_TBI")])
+
+## cognitive status tau
+
+table1(~ factor(cognitive_status_tau) | TBI_status, data = ADNI_df)
+
+table <- table(ADNI_df$cognitive_status_tau, ADNI_df$TBI_status)
+result <- fisher.test(table)
+
+fisher.test(table[,c("No_TBI","Mild_TBI")])
+fisher.test(table[,c("No_TBI","Moderate_severe_TBI")])
+fisher.test(table[,c("Mild_TBI","Moderate_severe_TBI")])
+
+pairwise_fisher_test(as.matrix(table), p.adjust.method = "fdr")
+
+## TBI Vietnam
+
+table1(~ factor(TBI_Vietnam) | TBI_status, data = ADNI_df)
+
+table <- table(ADNI_df$TBI_Vietnam, ADNI_df$TBI_status)
+table <- table[, -1]
+result <- chisq.test(table)
+
+chisq.test(table[,c("No_TBI","Mild_TBI")])
+chisq.test(table[,c("No_TBI","Moderate_severe_TBI")])
+chisq.test(table[,c("Mild_TBI","Moderate_severe_TBI")])
+
+## TBI frequency
+
+table1(~ factor(TBI_frequency) | TBI_status, data = ADNI_df)
+
+table <- table(ADNI_df$TBI_frequency, ADNI_df$TBI_status)
+table <- table[, -1]
+result <- fisher.test(table)
+
+fisher.test(table[,c("No_TBI","Mild_TBI")])
+fisher.test(table[,c("No_TBI","Moderate_severe_TBI")])
+fisher.test(table[,c("Mild_TBI","Moderate_severe_TBI")])
+
+pairwise_fisher_test(as.matrix(table), p.adjust.method = "fdr")
+
+## amyloid global
+
+table1(~ (amyloid_global) | TBI_status, data = ADNI_df)
+tmp.aov <- aov(ADNI_df$amyloid_global  ~ ADNI_df$TBI_status)
+summary(tmp.aov)
+TukeyHSD(tmp.aov)
+
+## tau global
+
+table1(~ (tau_global) | TBI_status, data = ADNI_df)
+tmp.aov <- aov(ADNI_df$tau_global  ~ ADNI_df$TBI_status)
+summary(tmp.aov)
+TukeyHSD(tmp.aov)
+
+## time lag amyloid tau PET
+
+table1(~ (time_lag_tau_amyloid_PET) | TBI_status, data = ADNI_df)
+tmp.aov <- aov(ADNI_df$time_lag_tau_amyloid_PET  ~ ADNI_df$TBI_status)
+summary(tmp.aov)
+TukeyHSD(tmp.aov)
+
+## time lag TBI tau PET
+
+tmp_data <- subset(ADNI_df, TBI_status != "No_TBI")
+tmp_data$TBI_status <- droplevels(tmp_data$TBI_status)
+
+table1(~ (time_lag_TBI_tau_PET) | TBI_status, data = tmp_data)
+
+t.test(time_lag_TBI_tau_PET ~ TBI_status, data = tmp_data)
+
+```
+
+# load relevant data files for supplementary table 1
+
+```{r}
+
+medhist <- read.csv("C:/MEDHIST_01Oct2024.csv")
+
+medhist_filtered <- medhist %>%
+  filter(SCRNO %in% ADNI_df$SCRNO) %>%
+  dplyr::select(SCRNO, 9:25)
+
+ADNI_df <- merge(ADNI_df, 
+                medhist_filtered[, c("SCRNO", "MHPSYCH", "MH2NEURL", "MH4CARD")], 
+                by = "SCRNO", 
+                all.x = TRUE)
+
+SCID <- read.csv("C:/SCID_01Oct2024.csv")
+
+SCID_filtered <- SCID %>%
+  filter(SCRNO %in% ADNI_df$SCRNO) %>%
+  dplyr::select(SCRNO, BP1CA, MDC, DYS, DNC, MOODDGMC, ALC1, ALC2, POL1, POL2, SIMDC, PSYC, ANXC, AGORC, SPC, PHOBC, OCDC, GADC, ANXGMCC, SIANXC, ANXNC)
+
+ADNI_df <- merge(ADNI_df, 
+                SCID_filtered, 
+                by = "SCRNO", 
+                all.x = TRUE)
+
+ADNI_df$ALC1_text <- mapvalues(ADNI_df$ALC1, from = c(1, NA), to = c("Alcohol abuse", NA))
+ADNI_df$ALC2_text <- mapvalues(ADNI_df$ALC2, from = c(1, NA), to = c("Alcohol dependence", NA))
+ADNI_df$Alcohol_status <- ifelse(!is.na(ADNI_df$ALC2_text), "Alcohol dependence",
+                                ifelse(!is.na(ADNI_df$ALC1_text), "Alcohol abuse", NA))
+ADNI_df$Alcohol_status <- mapvalues(ADNI_df$Alcohol_status, from = c(NA), to = c("No alcohol abuse/dependence"))
+
+```
+
+# create supplementary table 1
+
+```{r}
+
+vars_tableone <- c("MH2NEURL", "MH4CARD", "MHPSYCH", "PTSD_current", "MDC", "Alcohol_status")
+catVars <- c("MH2NEURL", "MH4CARD", "MHPSYCH", "PTSD_current", "MDC", "Alcohol_status") 
+
+table1 <- tableone::CreateTableOne(vars = vars_tableone, strata = c("TBI_status"), 
+                                   data = ADNI_df, factorVars = catVars, addOverall = TRUE)
+
+```
+
+# compare variables between groups for supplementary table 1
+
+```{r}
+
+## PTSD
+
+table <- table(tmp.df$PTSD_current, tmp.df$TBI_status)
+
+result <- chisq.test(table)
+result
+
+## Medical history - Psychiatric
+
+table <- table(tmp.df$MHPSYCH, tmp.df$TBI_status)
+
+result <- chisq.test(table)
+result
+
+## Medical history - Cardiological
+
+table <- table(tmp.df$MH4CARD, tmp.df$TBI_status)
+
+result <- chisq.test(table)
+result
+
+## Medical history - Neurological
+
+table <- table(tmp.df$MH2NEURL, tmp.df$TBI_status)
+
+result <- chisq.test(table)
+result
+
+# Pairwise Fisher's Exact Test
+# No_TBI vs Mild_TBI
+table_no_tbi_vs_mild <- table[, c("No_TBI", "Mild_TBI")]
+fisher_no_tbi_vs_mild <- fisher.test(table_no_tbi_vs_mild)
+
+# No_TBI vs Moderate_severe_TBI
+table_no_tbi_vs_mod <- table[, c("No_TBI", "Moderate_severe_TBI")]
+fisher_no_tbi_vs_mod <- fisher.test(table_no_tbi_vs_mod)
+
+# Mild_TBI vs Moderate_severe_TBI
+table_mild_vs_mod <- table[, c("Mild_TBI", "Moderate_severe_TBI")]
+fisher_mild_vs_mod <- fisher.test(table_mild_vs_mod)
+
+# Print the results
+fisher_no_tbi_vs_mild
+fisher_no_tbi_vs_mod
+fisher_mild_vs_mod
+
+# Extract p-values
+p_values <- c(fisher_no_tbi_vs_mild$p.value, fisher_no_tbi_vs_mod$p.value, fisher_mild_vs_mod$p.value)
+
+# Adjust p-values with Bonferroni correction
+comparisons <- c("No_TBI vs Mild_TBI", "No_TBI vs Moderate_severe_TBI", "Mild_TBI vs Moderate_severe_TBI")
+p_values_adjusted <- p.adjust(p_values, method = "bonferroni")
+
+# Combine labels and adjusted p-values
+adjusted_p_values <- data.frame(Comparison = comparisons, Adjusted_P_Value = p_values_adjusted)
+
+# Print the labeled adjusted p-values
+print(adjusted_p_values)
+
+# Depression
+
+table <- table(tmp.df$MDC, tmp.df$TBI_status)
+
+result <- fisher.test(table)
+result
+
+# Alcohol status
+
+table <- table(tmp.df$Alcohol_status, tmp.df$TBI_status)
+
+result <- fisher.test(table)
+result
+
+```
+
+# plot and assess TBI group (yes/no) differences in global tau PET
+
+```{r}
+
+## plot
+
+ADNI_df$TBI_yn <- gsub("_", " ", ADNI_df$TBI_yn)
+
+nudge_levels <- c("No TBI" = -0.55, "TBI" = -0.35)
+
+p1 <- ggplot(data = ADNI_df, 
+             aes(x = factor(TBI_yn, levels = c("No TBI", "TBI")),
+                 y = tau_global)) +
+    ggdist::stat_halfeye(data = subset(ADNI_df, TBI_yn == "No TBI"),
+                         adjust = 0.8, justification = -.2, .width = 0, 
+                         point_colour = NA, alpha = 0.5, 
+                         fill = "#336b99",  
+                         position = position_nudge(x = nudge_levels["No TBI"])) +
+    ggdist::stat_halfeye(data = subset(ADNI_df, TBI_yn == "TBI"),
+                         adjust = 0.8, justification = -.2, .width = 0, 
+                         point_colour = NA, alpha = 0.5, 
+                         fill = "#336b99",  
+                         position = position_nudge(x = nudge_levels["TBI"])) +
+    geom_boxplot(data = subset(ADNI_df, TBI_yn == "No TBI"),
+                 width = .08, outlier.color = NA, alpha = 1, fill = "#cfcfcf", 
+                 position = position_nudge(x = -0.47)) +
+    geom_boxplot(data = subset(ADNI_df, TBI_yn == "TBI"),
+                 width = .08, outlier.color = NA, alpha = 1, fill = "#cfcfcf", 
+                 position = position_nudge(x = -0.27)) +
+    geom_jitter(data = subset(ADNI_df, cognitive_status_tau == "MCI" & TBI_yn == "No TBI"),
+                aes(x = as.numeric(factor(TBI_yn, levels = c("No TBI", "TBI"))) - 0.04 + runif(nrow(subset(ADNI_df, cognitive_status_tau == "MCI" & TBI_yn == "No TBI")), -0.36, -0.3),
+                    y = tau_global, 
+                    shape = factor(cognitive_status_tau, levels = c("CN", "MCI"))),  
+                size = 2, 
+                alpha = 0.5, color = "#6e6e6e", stroke = 2) +
+    geom_jitter(data = subset(ADNI_df, cognitive_status_tau == "MCI" & TBI_yn == "TBI"),
+                aes(x = as.numeric(factor(TBI_yn, levels = c("No TBI", "TBI"))) - 0.04 + runif(nrow(subset(ADNI_df, cognitive_status_tau == "MCI" & TBI_yn == "TBI")), -0.16, -0.10),
+                    y = tau_global, 
+                    shape = factor(cognitive_status_tau, levels = c("CN", "MCI"))),  
+                size = 2, 
+                alpha = 0.5, color = "#6e6e6e", stroke = 2) +
+    geom_jitter(data = subset(ADNI_df, cognitive_status_tau == "CN" & TBI_yn == "No TBI"),
+                aes(x = as.numeric(factor(TBI_yn, levels = c("No TBI", "TBI"))) + 0.05 + runif(nrow(subset(ADNI_df, cognitive_status_tau == "CN" & TBI_yn == "No TBI")), -0.42, -0.35),
+                    y = tau_global, 
+                    shape = factor(cognitive_status_tau, levels = c("CN", "MCI"))),  
+                size = 2, 
+                alpha = 0.5, color = "#6e6e6e", stroke = 2) +
+    geom_jitter(data = subset(ADNI_df, cognitive_status_tau == "CN" & TBI_yn == "TBI"),
+                aes(x = as.numeric(factor(TBI_yn, levels = c("No TBI", "TBI"))) + 0.05 + runif(nrow(subset(ADNI_df, cognitive_status_tau == "CN" & TBI_yn == "TBI")), -0.22, -0.18),
+                    y = tau_global, 
+                    shape = factor(cognitive_status_tau, levels = c("CN", "MCI"))),  
+                size = 2, 
+                alpha = 0.5, color = "#6e6e6e", stroke = 2) +
+    theme_bw() + 
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(size = 16),  
+          axis.text.y = element_blank(), 
+          axis.ticks = element_blank(), 
+          axis.ticks.length = unit(0, "cm"),
+          axis.title.x = element_text(size = 17),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          plot.title = element_text(size = 20, hjust = 0.5, face = "bold")) +
+    labs(title = "title",
+         subtitle = NULL,
+         x = NULL,
+         y = "Global tau-PET SUVR",
+         fill = NULL) +
+    scale_y_continuous(limits = c(0.84, 1.5), breaks = seq(0.75, 1.5, by = 0.25)) + 
+    scale_shape_manual(name = NULL, values = c(16, 17), labels = c("CN", "MCI")) +  
+    guides(shape = guide_legend(override.aes = list(size = 5))) +  
+    theme(legend.text = element_text(size = 16))  
+
+p1 <- p1 + coord_flip()
+p1
+
+## statistics
+
+tmp.aov <- aov(data = ADNI_df,
+               tau_global ~ TBI_yn + Age_Tau_PET + 
+                  cognitive_status_tau + APOE_status + amyloid_global + time_lag_tau_amyloid_PET + time_lag_tau_PET_diagnosis)
+
+summary(tmp.aov)
+
+TukeyHSD(tmp.aov, which = "TBI_yn")
+
+```
+
+# plot and assess TBI group (no/mild/moderate-severe) differences in global tau PET
+
+```{r}
+
+## plot
+
+ADNI_df$TBI_status <- gsub("_", " ", ADNI_df$TBI_status)
+ADNI_df$TBI_status <- mapvalues(ADNI_df$TBI_status,
+                                       from = "Moderate severe TBI",
+                                       to = "Moderate/severe TBI")
+
+nudge_levels <- c("No TBI" = -0.6, "Mild TBI" = -0.5, "Moderate/severe TBI" = -0.4)
+
+p2 <- ggplot(data = ADNI_df, 
+             aes(x = factor(TBI_status),
+                 y = tau_global)) +
+    ggdist::stat_halfeye(data = subset(ADNI_df, TBI_status == "No TBI"),
+                     adjust = 0.8, justification = -.2, .width = 0, 
+                     point_colour = NA, alpha = 0.5, 
+                     fill = "#336b99",  
+                     position = position_nudge(x = nudge_levels["No TBI"])) +
+    
+    ggdist::stat_halfeye(data = subset(ADNI_df, TBI_status == "Mild TBI"),
+                         adjust = 0.8, justification = -.2, .width = 0, 
+                         point_colour = NA, alpha = 0.5, 
+                         fill = "#336b99",  
+                         position = position_nudge(x = nudge_levels["Mild TBI"])) +
+    
+    ggdist::stat_halfeye(data = subset(ADNI_df, TBI_status == "Moderate/severe TBI"),
+                         adjust = 0.8, justification = -.2, .width = 0, 
+                         point_colour = NA, alpha = 0.5, 
+                         fill = "#336b99",  
+                         position = position_nudge(x = nudge_levels["Moderate/severe TBI"])) +
+    
+    geom_boxplot(data = subset(ADNI_df, TBI_status == "No TBI"),
+                 width = .1, outlier.color = NA, alpha = 1, fill = "#cfcfcf", 
+                 position = position_nudge(x = -0.5)) +
+    
+    geom_boxplot(data = subset(ADNI_df, TBI_status == "Mild TBI"),
+                 width = .1, outlier.color = NA, alpha = 1, fill = "#cfcfcf", 
+                 position = position_nudge(x = -0.4)) +
+    
+    geom_boxplot(data = subset(ADNI_df, TBI_status == "Moderate/severe TBI"),
+                 width = .1, outlier.color = NA, alpha = 1, fill = "#cfcfcf", 
+                 position = position_nudge(x = -0.3)) +
+    
+    geom_jitter(data = subset(ADNI_df, cognitive_status_tau == "MCI" & TBI_status == "No TBI"),
+                aes(x = as.numeric(factor(TBI_status, levels = c("No TBI", "Mild TBI", "Moderate/severe TBI"))) - 0.04 + runif(nrow(subset(ADNI_df, cognitive_status_tau == "MCI" & TBI_status == "No TBI")), -0.35, -0.25),
+                    y = tau_global, 
+                    shape = factor(cognitive_status_tau, levels = c("CN", "MCI"))),  
+                size = 2.5, 
+                alpha = 0.5, color = "#6e6e6e", stroke = 2) +
+    
+    geom_jitter(data = subset(ADNI_df, cognitive_status_tau == "MCI" & TBI_status == "Mild TBI"),
+                aes(x = as.numeric(factor(TBI_status, levels = c("No TBI", "Mild TBI", "Moderate/severe TBI"))) - 0.04 + runif(nrow(subset(ADNI_df, cognitive_status_tau == "MCI" & TBI_status == "Mild TBI")), -0.25, -0.15),
+                    y = tau_global, 
+                    shape = factor(cognitive_status_tau, levels = c("CN", "MCI"))),  
+                size = 2.5, 
+                alpha = 0.5, color = "#6e6e6e", stroke = 2) +
+    
+    geom_jitter(data = subset(ADNI_df, cognitive_status_tau == "MCI" & TBI_status == "Moderate/severe TBI"),
+                aes(x = as.numeric(factor(TBI_status, levels = c("No TBI", "Mild TBI", "Moderate/severe TBI"))) - 0.04 + runif(nrow(subset(ADNI_df, cognitive_status_tau == "MCI" & TBI_status == "Moderate/severe TBI")), -0.15, -0.05),
+                    y = tau_global, 
+                    shape = factor(cognitive_status_tau, levels = c("CN", "MCI"))),  
+                size = 2.5, 
+                alpha = 0.5, color = "#6e6e6e", stroke = 2) +
+    
+    geom_jitter(data = subset(ADNI_df, cognitive_status_tau == "CN" & TBI_status == "No TBI"),
+                aes(x = as.numeric(factor(TBI_status, levels = c("No TBI", "Mild TBI", "Moderate/severe TBI" ))) + 0.05 + runif(nrow(subset(ADNI_df, cognitive_status_tau == "CN" & TBI_status == "No TBI")), -0.45, -0.35),
+                    y = tau_global, 
+                    shape = factor(cognitive_status_tau, levels = c("CN", "MCI"))),  
+                size = 2.5, 
+                alpha = 0.5, color = "#6e6e6e", stroke = 2) +
+    
+    geom_jitter(data = subset(ADNI_df, cognitive_status_tau == "CN" & TBI_status == "Mild TBI"),
+                aes(x = as.numeric(factor(TBI_status, levels = c("No TBI", "Mild TBI", "Moderate/severe TBI"))) + 0.05 + runif(nrow(subset(ADNI_df, cognitive_status_tau == "CN" & TBI_status == "Mild TBI")), -0.35, -0.25),
+                    y = tau_global, 
+                    shape = factor(cognitive_status_tau, levels = c("CN", "MCI"))),  
+                size = 2.5, 
+                alpha = 0.5, color = "#6e6e6e", stroke = 2) +
+    
+    geom_jitter(data = subset(ADNI_df, cognitive_status_tau == "CN" & TBI_status == "Moderate/severe TBI"),
+                aes(x = as.numeric(factor(TBI_status, levels = c("No TBI", "Mild TBI", "Moderate/severe TBI"))) + 0.05 + runif(nrow(subset(ADNI_df, cognitive_status_tau == "CN" & TBI_status == "Moderate/severe TBI")), -0.25, -0.15),
+                    y = tau_global, 
+                    shape = factor(cognitive_status_tau, levels = c("CN", "MCI"))),  
+                size = 2.5, 
+                alpha = 0.5, color = "#6e6e6e", stroke = 2) +
+    
+    theme_bw() + 
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(size = 16),  
+          axis.text.y = element_blank(),  
+          axis.ticks = element_blank(), 
+          axis.ticks.length = unit(0, "cm"),
+          axis.title.x = element_text(size = 17),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          plot.title = element_text(size = 20, hjust = 0.5, face = "bold")) +
+    
+    labs(title = "title",
+         subtitle = NULL,
+         x = NULL,
+         y = "Global tau-PET SUVR",
+         fill = NULL) +
+    
+    scale_y_continuous(limits = c(0.84, 1.5), breaks = seq(0.75, 1.5, by = 0.25)) + 
+    scale_shape_manual(name = NULL, values = c(16, 17), labels = c("CN", "MCI")) +  
+    guides(shape = guide_legend(override.aes = list(size = 5))) +  
+    theme(legend.text = element_text(size = 16))
+
+p2 <- p2 + scale_x_discrete(limits = c("No TBI", "Mild TBI", "Moderate/severe TBI"))
+
+p2 <- p2 + coord_flip()
+
+p2
+
+## statistics
+
+tmp.aov <- aov(data = ADNI_df,
+               tau_global ~ TBI_status + Age_Tau_PET + 
+                  cognitive_status_tau + APOE_status + amyloid_global + time_lag_tau_amyloid_PET + time_lag_tau_PET_diagnosis)
+
+summary(tmp.aov)
+
+TukeyHSD(tmp.aov, which = "TBI_status")
+
+```
+
+# plot and assess TBI group (yes/no) differences in regional tau PET
+
+```{r}
+
+## statistics
+
+anova.summary.main.effect = data.frame(fvals = rep(NA, 200), pvals = rep(NA, 200))
+
+for (i in 1:200){
+  current.data <- ADNI_df %>% dplyr::rename(current.ROI.tau = paste0("ROI_Schaefer_tau_", i),
+                                        current.ROI.amyloid = paste0("ROI_Schaefer_amy_", i))
+  tmp.aov <- summary(aov(data = current.data, 
+                   current.ROI.tau ~ TBI_yn + Age_Tau_PET + 
+                      APOE_status + current.ROI.amyloid + tau_global + time_lag_tau_amyloid_PET))
+  anova.summary.main.effect$fvals[i] = tmp.aov[[1]]["TBI_yn", "F value"]
+  anova.summary.main.effect$pvals[i] = tmp.aov[[1]]["TBI_yn", "Pr(>F)"]
+
+}
+
+anova.summary.main.effect$pvals_corrected <- p.adjust(anova.summary.main.effect$pvals, method = "BH")
+anova.summary.main.effect$fvals_corrected = anova.summary.main.effect$fvals * as.numeric(anova.summary.main.effect$pvals_corrected<0.05)
+
+## save plot file for editing in connectome workbench (using another dependency R file)
+
+tmp <- anova.summary.main.effect$fvals_corrected
+
+source("C:/rendering_function_17N.R")
+
+render_vector(tmp, "title", 200)
+
+## save significant regions of interest to be used later on
+
+anova.summary.main.effect$row_number <- seq_len(nrow(anova.summary.main.effect))
+significant_rows <- anova.summary.main.effect$pvals_corrected < 0.05
+tau_filtered_ancova_yesno <- anova.summary.main.effect[significant_rows, ]
+
+```
+
+# create sub dataframes in order to compare separate TBI groups
+
+```{r}
+
+wo_modsev <- subset(ADNI_df, TBI_status != "Moderate_severe_TBI")
+
+wo_mild <- subset(ADNI_df, TBI_status != "Mild_TBI")
+
+wo_no <- subset(ADNI_df, TBI_status != "No_TBI")
+
+```
+
+# assess TBI group (no/mild/moderate-severe) differences in regional tau PET
+
+```{r}
+
+## no TBI vs mild TBI
+
+### statistics
+
+anova.summary.main.effect = data.frame(fvals = rep(NA, 200), pvals = rep(NA, 200))
+
+for (i in 1:200){
+  current.data <- wo_modsev %>% dplyr::rename(current.ROI.tau = paste0("ROI_Schaefer_tau_", i),
+                                                  current.ROI.amyloid = paste0("ROI_Schaefer_amy_", i))
+  tmp.aov <- summary(aov(data = current.data, 
+                   current.ROI.tau ~ TBI_status + Age_Tau_PET + 
+                      APOE_status + current.ROI.amyloid + tau_global + time_lag_tau_amyloid_PET))
+  anova.summary.main.effect$fvals[i] = tmp.aov[[1]]["TBI_status", "F value"]
+  anova.summary.main.effect$pvals[i] = tmp.aov[[1]]["TBI_status", "Pr(>F)"]
+
+}
+
+anova.summary.main.effect$pvals_corrected <- p.adjust(anova.summary.main.effect$pvals, method = "BH")
+anova.summary.main.effect$fvals_corrected = anova.summary.main.effect$fvals * as.numeric(anova.summary.main.effect$pvals_corrected<0.05)
+
+### save plot file for editing in connectome workbench (using another dependency R file)
+
+tmp <- anova.summary.main.effect$fvals_corrected
+
+source("C:/rendering_function_17N.R")
+
+render_vector(tmp, "title", 200)
+
+### save significant regions of interest to be used later on
+
+anova.summary.main.effect$row_number <- seq_len(nrow(anova.summary.main.effect))
+significant_rows <- anova.summary.main.effect$pvals_corrected < 0.05
+tau_filtered_ancova_no_vs_mild <- anova.summary.main.effect[significant_rows, ]
+
+tau_significant_rows <- tau_filtered_ancova_no_vs_mild$row_number
+wo_modsev_tau <- tau_significant_rows
+
+## no TBI vs moderate/severe TBI
+
+### statistics
+
+anova.summary.main.effect = data.frame(fvals = rep(NA, 200), pvals = rep(NA, 200))
+
+for (i in 1:200){
+  current.data <- wo_mild %>% dplyr::rename(current.ROI.tau = paste0("ROI_Schaefer_tau_", i),
+                                                  current.ROI.amyloid = paste0("ROI_Schaefer_amy_", i))
+  tmp.aov <- summary(aov(data = current.data, 
+                   current.ROI.tau ~ TBI_status + Age_Tau_PET + 
+                      APOE_status + current.ROI.amyloid + tau_global + time_lag_tau_amyloid_PET))
+  anova.summary.main.effect$fvals[i] = tmp.aov[[1]]["TBI_status", "F value"]
+  anova.summary.main.effect$pvals[i] = tmp.aov[[1]]["TBI_status", "Pr(>F)"]
+
+}
+
+anova.summary.main.effect$pvals_corrected <- p.adjust(anova.summary.main.effect$pvals, method = "BH")
+anova.summary.main.effect$fvals_corrected = anova.summary.main.effect$fvals * as.numeric(anova.summary.main.effect$pvals_corrected<0.05)
+
+### save plot file for editing in connectome workbench (using another dependency R file)
+
+tmp <- anova.summary.main.effect$fvals_corrected
+
+source("C:/rendering_function_17N.R")
+
+render_vector(tmp, "title", 200)
+
+### save significant regions of interest to be used later on
+
+anova.summary.main.effect$row_number <- seq_len(nrow(anova.summary.main.effect))
+significant_rows <- anova.summary.main.effect$pvals_corrected < 0.05
+tau_filtered_ancova_no_vs_modsev <- anova.summary.main.effect[significant_rows, ]
+
+tau_significant_rows <- tau_filtered_ancova_no_vs_modsev$row_number
+wo_mild_tau <- tau_significant_rows
+
+## mild TBI vs moderate/severe TBI
+
+### statistics
+
+anova.summary.main.effect = data.frame(fvals = rep(NA, 200), pvals = rep(NA, 200))
+
+for (i in 1:200){
+  current.data <- wo_no %>% dplyr::rename(current.ROI.tau = paste0("ROI_Schaefer_tau_", i),
+                                                  current.ROI.amyloid = paste0("ROI_Schaefer_amy_", i))
+  tmp.aov <- summary(aov(data = current.data, 
+                   current.ROI.tau ~ TBI_status + Age_Tau_PET + 
+                      APOE_status + current.ROI.amyloid + tau_global + time_lag_tau_amyloid_PET))
+  anova.summary.main.effect$fvals[i] = tmp.aov[[1]]["TBI_status", "F value"]
+  anova.summary.main.effect$pvals[i] = tmp.aov[[1]]["TBI_status", "Pr(>F)"]
+
+}
+
+anova.summary.main.effect$pvals_corrected <- p.adjust(anova.summary.main.effect$pvals, method = "BH")
+anova.summary.main.effect$fvals_corrected = anova.summary.main.effect$fvals * as.numeric(anova.summary.main.effect$pvals_corrected<0.05)
+
+### save plot file for editing in connectome workbench (using another dependency R file)
+
+tmp <- anova.summary.main.effect$fvals_corrected
+
+source("C:/rendering_function_17N.R")
+
+render_vector(tmp, "title", 200)
+
+### save significant regions of interest to be used later on
+
+anova.summary.main.effect$row_number <- seq_len(nrow(anova.summary.main.effect))
+significant_rows <- anova.summary.main.effect$pvals_corrected < 0.05
+tau_filtered_ancova_mild_vs_modsev <- anova.summary.main.effect[significant_rows, ]
+
+tau_significant_rows <- tau_filtered_ancova_mild_vs_modsev$row_number
+wo_no_tau <- tau_significant_rows
+
+```
+
+# assess TBI group (no/mild/moderate-severe) differences in average regional tau PET among significant ANCOVA associations from previous step
+
+```{r}
+
+## combination of ROIs
+
+combined_tau <- union(union(wo_modsev_tau, wo_mild_tau), wo_no_tau)
+combined_tau
+
+## create tau average
+
+tau <- ADNI_df %>% 
+  dplyr::select(starts_with("ROI_Schaefer_tau_"), SCRNO, TBI_status, cognitive_status_tau, Age_Tau_PET, APOE_status, amyloid_global, tau_global, time_lag_tau_amyloid_PET) %>% 
+  rename_with(~ str_remove(., "ROI_Schaefer_tau_"), starts_with("ROI_Schaefer_tau_"))
+
+tau_subset <- tau[, c(combined_tau, "SCRNO", "TBI_status", "cognitive_status_tau", "Age_Tau_PET", "APOE_status", "amyloid_global", "tau_global", "time_lag_tau_amyloid_PET")]
+row_means <- rowMeans(tau_subset[, !names(tau_subset) %in% c('SCRNO', 'TBI_status', 'cognitive_status_tau', 'Age_Tau_PET', 'APOE_status', 'amyloid_global', 'tau_global', 'time_lag_tau_amyloid_PET')])
+tau_subset$row_means <- row_means
+
+## plot
+
+t1 <- ggplot(data = tau_subset, 
+             aes(x = factor(TBI_status), 
+                 y = row_means)) +
+  geom_boxplot(width = 0.4, notch = F, alpha = 0.5, fill = "#336b99") +
+  geom_beeswarm(aes(shape = factor(cognitive_status_tau, levels = c("CN", "MCI"))), 
+                size = 4, 
+                alpha = 0.5, color = "#6e6e6e") +
+  scale_shape_manual(name = NULL, values = c(16, 17), labels = c("CN", "MCI")) +
+  theme_bw() + 
+  theme(legend.position = "none",
+        legend.text = element_text(size = 18),
+        axis.text.x = element_text(size = 22),  
+        axis.text.y = element_text(size = 22),  
+        axis.ticks = element_line(), 
+        axis.title.x = element_text(size = 24),
+        axis.title.y = element_text(size = 24),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.title = element_text(size = 20, hjust = 0.5, face = "bold")) +
+  labs(title = "title",
+       subtitle = NULL,
+       x = NULL,
+       y = "Average tau-PET SUVR",
+       fill = NULL) +
+  scale_x_discrete(limits = c("No TBI", "Mild TBI", "Moderate/severe TBI")) +
+  guides(shape = guide_legend(override.aes = list(size = 5, linetype = 0, fill = NA),  
+                              nrow = 1, 
+                              byrow = TRUE)) 
+
+## statistics
+
+tmp.aov <- aov(data = tau_subset,
+               row_means ~ TBI_status + Age_Tau_PET + 
+                 APOE_status + amyloid_global + tau_global + time_lag_tau_amyloid_PET)
+
+summary(tmp.aov)
+
+TukeyHSD(tmp.aov, which = "TBI_status")
+
+```
+
+# assess TBI group (yes/no) differences in global amyloid PET
+
+```{r}
+
+## plot
+
+ADNI_df$TBI_yn <- gsub("_", " ", ADNI_df$TBI_yn)
+
+nudge_levels <- c("No TBI" = -0.55, "TBI" = -0.35)
+
+f1 <- ggplot(data = ADNI_df, 
+             aes(x = factor(TBI_yn, levels = c("No TBI", "TBI")),
+                 y = amyloid_global)) +
+    ggdist::stat_halfeye(data = subset(ADNI_df, TBI_yn == "No TBI"),
+                         adjust = 0.8, justification = -.2, .width = 0, 
+                         point_colour = NA, alpha = 0.5, 
+                         fill = "#9c3333",  
+                         position = position_nudge(x = nudge_levels["No TBI"])) +
+    ggdist::stat_halfeye(data = subset(ADNI_df, TBI_yn == "TBI"),
+                         adjust = 0.8, justification = -.2, .width = 0, 
+                         point_colour = NA, alpha = 0.5, 
+                         fill = "#9c3333",  
+                         position = position_nudge(x = nudge_levels["TBI"])) +
+    geom_boxplot(data = subset(ADNI_df, TBI_yn == "No TBI"),
+                 width = .08, outlier.color = NA, alpha = 1, fill = "#cfcfcf", 
+                 position = position_nudge(x = -0.47)) +
+    geom_boxplot(data = subset(ADNI_df, TBI_yn == "TBI"),
+                 width = .08, outlier.color = NA, alpha = 1, fill = "#cfcfcf", 
+                 position = position_nudge(x = -0.27)) +
+    geom_jitter(data = subset(ADNI_df, cognitive_status_amy == "MCI" & TBI_yn == "No TBI"),
+                aes(x = as.numeric(factor(TBI_yn, levels = c("No TBI", "TBI"))) - 0.04 + runif(nrow(subset(ADNI_df, cognitive_status_amy == "MCI" & TBI_yn == "No TBI")), -0.36, -0.30),
+                    y = amyloid_global, 
+                    shape = factor(cognitive_status_amy, levels = c("CN", "MCI"))),  
+                size = 2, 
+                alpha = 0.5, color = "#6e6e6e", stroke = 2) +
+    geom_jitter(data = subset(ADNI_df, cognitive_status_amy == "MCI" & TBI_yn == "TBI"),
+                aes(x = as.numeric(factor(TBI_yn, levels = c("No TBI", "TBI"))) - 0.04 + runif(nrow(subset(ADNI_df, cognitive_status_amy == "MCI" & TBI_yn == "TBI")), -0.16, -0.10),
+                    y = amyloid_global, 
+                    shape = factor(cognitive_status_amy, levels = c("CN", "MCI"))),  
+                size = 2, 
+                alpha = 0.5, color = "#6e6e6e", stroke = 2) +
+    geom_jitter(data = subset(ADNI_df, cognitive_status_amy == "CN" & TBI_yn == "No TBI"),
+                aes(x = as.numeric(factor(TBI_yn, levels = c("No TBI", "TBI"))) + 0.05 + runif(nrow(subset(ADNI_df, cognitive_status_amy == "CN" & TBI_yn == "No TBI")), -0.42, -0.35),
+                    y = amyloid_global, 
+                    shape = factor(cognitive_status_amy, levels = c("CN", "MCI"))),  
+                size = 2, 
+                alpha = 0.5, color = "#6e6e6e", stroke = 2) +
+    geom_jitter(data = subset(ADNI_df, cognitive_status_amy == "CN" & TBI_yn == "TBI"),
+                aes(x = as.numeric(factor(TBI_yn, levels = c("No TBI", "TBI"))) + 0.05 + runif(nrow(subset(ADNI_df, cognitive_status_amy == "CN" & TBI_yn == "TBI")), -0.22, -0.18),
+                    y = amyloid_global, 
+                    shape = factor(cognitive_status_amy, levels = c("CN", "MCI"))),  
+                size = 2, 
+                alpha = 0.5, color = "#6e6e6e", stroke = 2) +
+    theme_bw() + 
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(size = 16),  
+          axis.text.y = element_blank(),
+          axis.title.x = element_text(size = 17),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          plot.title = element_text(size = 20, hjust = 0.5, face = "bold")) +
+    labs(title = "title",
+         subtitle = NULL,
+         x = NULL,
+         y = "Global amyloid-β PET SUVR",
+         fill = NULL) +
+    scale_y_continuous(limits = c(0.84, 1.75), breaks = seq(0.75, 1.75, by = 0.25)) + 
+    scale_shape_manual(name = NULL, values = c(16, 17), labels = c("CN", "MCI")) +  
+    guides(shape = guide_legend(override.aes = list(size = 5))) +  
+    theme(legend.text = element_text(size = 16))  
+
+f1 <- f1 + coord_flip()
+
+f1
+
+## statistics
+
+tmp.aov <- aov(data = ADNI_df,
+               amyloid_global ~ TBI_yn + Age_Amyloid_PET + 
+                  cognitive_status_amy + APOE_status + time_lag_amyloid_PET_diagnosis)
+
+summary(tmp.aov)
+
+TukeyHSD(tmp.aov, which = "TBI_yn")
+
+```
+
+# assess TBI group (no/mild/moderate-severe) differences in global amyloid PET
+
+```{r}
+
+## plot
+
+ADNI_df$TBI_status <- gsub("_", " ", ADNI_df$TBI_status)
+ADNI_df$TBI_status <- mapvalues(ADNI_df$TBI_status,
+                                       from = "Moderate severe TBI",
+                                       to = "Moderate/severe TBI")
+
+
+nudge_levels <- c("No TBI" = -0.6, "Mild TBI" = -0.5, "Moderate/severe TBI" = -0.4)
+
+f2 <- ggplot(data = ADNI_df, 
+             aes(x = factor(TBI_status),
+                 y = amyloid_global)) +
+    ggdist::stat_halfeye(data = subset(ADNI_df, TBI_status == "No TBI"),
+                     adjust = 0.8, justification = -.2, .width = 0, 
+                     point_colour = NA, alpha = 0.5, 
+                     fill = "#9c3333",  
+                     position = position_nudge(x = nudge_levels["No TBI"])) +
+    
+    ggdist::stat_halfeye(data = subset(ADNI_df, TBI_status == "Mild TBI"),
+                         adjust = 0.8, justification = -.2, .width = 0, 
+                         point_colour = NA, alpha = 0.5, 
+                         fill = "#9c3333",  
+                         position = position_nudge(x = nudge_levels["Mild TBI"])) +
+    
+    ggdist::stat_halfeye(data = subset(ADNI_df, TBI_status == "Moderate/severe TBI"),
+                         adjust = 0.8, justification = -.2, .width = 0, 
+                         point_colour = NA, alpha = 0.5, 
+                         fill = "#9c3333",  
+                         position = position_nudge(x = nudge_levels["Moderate/severe TBI"])) +
+    
+    geom_boxplot(data = subset(ADNI_df, TBI_status == "No TBI"),
+                 width = .1, outlier.color = NA, alpha = 1, fill = "#cfcfcf", 
+                 position = position_nudge(x = -0.5)) +
+    
+    geom_boxplot(data = subset(ADNI_df, TBI_status == "Mild TBI"),
+                 width = .1, outlier.color = NA, alpha = 1, fill = "#cfcfcf", 
+                 position = position_nudge(x = -0.4)) +
+    
+    geom_boxplot(data = subset(ADNI_df, TBI_status == "Moderate/severe TBI"),
+                 width = .1, outlier.color = NA, alpha = 1, fill = "#cfcfcf", 
+                 position = position_nudge(x = -0.3)) +
+    
+    geom_jitter(data = subset(ADNI_df, cognitive_status_amy == "MCI" & TBI_status == "No TBI"),
+                aes(x = as.numeric(factor(TBI_status, levels = c("No TBI", "Mild TBI", "Moderate/severe TBI"))) - 0.04 + runif(nrow(subset(ADNI_df, cognitive_status_amy == "MCI" & TBI_status == "No TBI")), -0.35, -0.25),
+                    y = amyloid_global, 
+                    shape = factor(cognitive_status_amy, levels = c("CN", "MCI"))),  
+                size = 2.5, 
+                alpha = 0.5, color = "#6e6e6e", stroke = 2) +
+    
+    geom_jitter(data = subset(ADNI_df, cognitive_status_amy == "MCI" & TBI_status == "Mild TBI"),
+                aes(x = as.numeric(factor(TBI_status, levels = c("No TBI", "Mild TBI", "Moderate/severe TBI"))) - 0.04 + runif(nrow(subset(ADNI_df, cognitive_status_amy == "MCI" & TBI_status == "Mild TBI")), -0.25, -0.15),
+                    y = amyloid_global, 
+                    shape = factor(cognitive_status_amy, levels = c("CN", "MCI"))),  
+                size = 2.5, 
+                alpha = 0.5, color = "#6e6e6e", stroke = 2) +
+    
+    geom_jitter(data = subset(ADNI_df, cognitive_status_amy == "MCI" & TBI_status == "Moderate/severe TBI"),
+                aes(x = as.numeric(factor(TBI_status, levels = c("No TBI", "Mild TBI", "Moderate/severe TBI"))) - 0.04 + runif(nrow(subset(ADNI_df, cognitive_status_amy == "MCI" & TBI_status == "Moderate/severe TBI")), -0.15, -0.05),
+                    y = amyloid_global, 
+                    shape = factor(cognitive_status_amy, levels = c("CN", "MCI"))),  
+                size = 2.5, 
+                alpha = 0.5, color = "#6e6e6e", stroke = 2) +
+    
+    geom_jitter(data = subset(ADNI_df, cognitive_status_amy == "CN" & TBI_status == "No TBI"),
+                aes(x = as.numeric(factor(TBI_status, levels = c("No TBI", "Mild TBI", "Moderate/severe TBI" ))) + 0.05 + runif(nrow(subset(ADNI_df, cognitive_status_amy == "CN" & TBI_status == "No TBI")), -0.45, -0.35),
+                    y = amyloid_global, 
+                    shape = factor(cognitive_status_amy, levels = c("CN", "MCI"))),  
+                size = 2.5, 
+                alpha = 0.5, color = "#6e6e6e", stroke = 2) +
+    
+    geom_jitter(data = subset(ADNI_df, cognitive_status_amy == "CN" & TBI_status == "Mild TBI"),
+                aes(x = as.numeric(factor(TBI_status, levels = c("No TBI", "Mild TBI", "Moderate/severe TBI"))) + 0.05 + runif(nrow(subset(ADNI_df, cognitive_status_amy == "CN" & TBI_status == "Mild TBI")), -0.35, -0.25),
+                    y = amyloid_global, 
+                    shape = factor(cognitive_status_amy, levels = c("CN", "MCI"))),  
+                size = 2.5, 
+                alpha = 0.5, color = "#6e6e6e", stroke = 2) +
+    
+    geom_jitter(data = subset(ADNI_df, cognitive_status_amy == "CN" & TBI_status == "Moderate/severe TBI"),
+                aes(x = as.numeric(factor(TBI_status, levels = c("No TBI", "Mild TBI", "Moderate/severe TBI"))) + 0.05 + runif(nrow(subset(ADNI_df, cognitive_status_amy == "CN" & TBI_status == "Moderate/severe TBI")), -0.25, -0.15),
+                    y = amyloid_global, 
+                    shape = factor(cognitive_status_amy, levels = c("CN", "MCI"))),  
+                size = 2.5, 
+                alpha = 0.5, color = "#6e6e6e", stroke = 2) +
+    
+    theme_bw() + 
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(size = 16),  
+          axis.text.y = element_blank(),
+          axis.title.x = element_text(size = 17),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          plot.title = element_text(size = 20, hjust = 0.5, face = "bold")) +
+    
+    labs(title = "title",
+         subtitle = NULL,
+         x = NULL,
+         y = "Global amyloid-β PET SUVR",
+         fill = NULL) +
+    
+    scale_y_continuous(limits = c(0.84, 1.75), breaks = seq(0.75, 1.75, by = 0.25)) + 
+    scale_shape_manual(name = NULL, values = c(16, 17), labels = c("CN", "MCI")) +  
+    guides(shape = guide_legend(override.aes = list(size = 5))) +  
+    theme(legend.text = element_text(size = 16))
+
+f2 <- f2 + scale_x_discrete(limits = c("No TBI", "Mild TBI", "Moderate/severe TBI"))
+
+f2 <- f2 + coord_flip()
+
+f2
+
+## statistics
+
+tmp.aov <- aov(data = ADNI_df,
+               amyloid_global ~ TBI_status + Age_Amyloid_PET + 
+                  cognitive_status_amy + APOE_status + time_lag_amyloid_PET_diagnosis)
+
+summary(tmp.aov)
+
+TukeyHSD(tmp.aov, which = "TBI_status")
+
+```
+
+# assess TBI group (yes/no) differences in regional amyloid PET
+
+```{r}
+
+## statistics
+
+anova.summary.main.effect = data.frame(fvals = rep(NA, 200), pvals = rep(NA, 200))
+
+for (i in 1:200){
+  current.data <- ADNI_df %>% dplyr::rename(current.ROI.amyloid = paste0("ROI_Schaefer_amy_", i))
+  tmp.aov <- summary(aov(data = current.data, 
+                   current.ROI.amyloid ~ TBI_yn + Age_Amyloid_PET + 
+                       APOE_status + amyloid_global))
+  anova.summary.main.effect$fvals[i] = tmp.aov[[1]]["TBI_yn", "F value"]
+  anova.summary.main.effect$pvals[i] = tmp.aov[[1]]["TBI_yn", "Pr(>F)"]
+
+}
+
+anova.summary.main.effect$pvals_corrected <- p.adjust(anova.summary.main.effect$pvals, method = "BH")
+anova.summary.main.effect$fvals_corrected = anova.summary.main.effect$fvals * as.numeric(anova.summary.main.effect$pvals_corrected<0.05)
+
+## save plot file for editing in connectome workbench (using another dependency R file)
+
+tmp <- anova.summary.main.effect$fvals_corrected
+
+source("C:/rendering_function_17N.R")
+
+render_vector(tmp, "title", 200)
+
+## save significant regions of interest to be used later on
+
+anova.summary.main.effect$row_number <- seq_len(nrow(anova.summary.main.effect))
+significant_rows <- anova.summary.main.effect$pvals_corrected < 0.05
+filter_amyloid_yesno <- anova.summary.main.effect[significant_rows, ]
+
+```
+
+# assess TBI group (no/mild/moderate-severe) differences in regional amyloid PET
+
+```{r}
+
+## no TBI vs mild TBI
+
+### statistics
+
+anova.summary.main.effect = data.frame(fvals = rep(NA, 200), pvals = rep(NA, 200))
+
+for (i in 1:200){
+  current.data <- wo_modsev %>% dplyr::rename(current.ROI.amyloid = paste0("ROI_Schaefer_amy_", i))
+  tmp.aov <- summary(aov(data = current.data, 
+                   current.ROI.amyloid ~ TBI_status + Age_Amyloid_PET + 
+                      APOE_status + amyloid_global))
+  anova.summary.main.effect$fvals[i] = tmp.aov[[1]]["TBI_status", "F value"]
+  anova.summary.main.effect$pvals[i] = tmp.aov[[1]]["TBI_status", "Pr(>F)"]
+
+}
+
+anova.summary.main.effect$pvals_corrected <- p.adjust(anova.summary.main.effect$pvals, method = "BH")
+anova.summary.main.effect$fvals_corrected = anova.summary.main.effect$fvals * as.numeric(anova.summary.main.effect$pvals_corrected<0.05)
+
+### save plot file for editing in connectome workbench (using another dependency R file)
+
+tmp <- anova.summary.main.effect$fvals_corrected
+
+source("C:/rendering_function_17N.R")
+
+render_vector(tmp, "title", 200)
+
+### save significant regions of interest to be used later on
+
+anova.summary.main.effect$row_number <- seq_len(nrow(anova.summary.main.effect))
+significant_rows <- anova.summary.main.effect$pvals_corrected < 0.05
+filter_amyloid_no_vs_mild <- anova.summary.main.effect[significant_rows, ]
+
+amyloid_significant_rows <- filter_amyloid_no_vs_mild$row_number
+wo_modsev_amy <- amyloid_significant_rows
+
+## no TBI vs moderate-severe TBI
+
+### statistics
+
+anova.summary.main.effect = data.frame(fvals = rep(NA, 200), pvals = rep(NA, 200))
+
+for (i in 1:200){
+  current.data <- wo_mild %>% dplyr::rename(current.ROI.amyloid = paste0("ROI_Schaefer_amy_", i))
+  tmp.aov <- summary(aov(data = current.data, 
+                   current.ROI.amyloid ~ TBI_status + Age_Amyloid_PET + 
+                      APOE_status + amyloid_global))
+  anova.summary.main.effect$fvals[i] = tmp.aov[[1]]["TBI_status", "F value"]
+  anova.summary.main.effect$pvals[i] = tmp.aov[[1]]["TBI_status", "Pr(>F)"]
+
+}
+
+anova.summary.main.effect$pvals_corrected <- p.adjust(anova.summary.main.effect$pvals, method = "BH")
+anova.summary.main.effect$fvals_corrected = anova.summary.main.effect$fvals * as.numeric(anova.summary.main.effect$pvals_corrected<0.05)
+
+### save plot file for editing in connectome workbench (using another dependency R file)
+
+tmp <- anova.summary.main.effect$fvals_corrected
+
+source("C:/rendering_function_17N.R")
+
+render_vector(tmp, "title", 200)
+
+### save significant regions of interest to be used later on
+
+anova.summary.main.effect$row_number <- seq_len(nrow(anova.summary.main.effect))
+significant_rows <- anova.summary.main.effect$pvals_corrected < 0.05
+filter_amyloid_no_vs_modsev <- anova.summary.main.effect[significant_rows, ]
+
+amyloid_significant_rows <- filter_amyloid_no_vs_modsev$row_number
+wo_mild_amy <- amyloid_significant_rows
+
+## mild TBI vs moderate-severe TBI
+
+### statistics
+
+anova.summary.main.effect = data.frame(fvals = rep(NA, 200), pvals = rep(NA, 200))
+
+for (i in 1:200){
+  current.data <- wo_no %>% dplyr::rename(current.ROI.amyloid = paste0("ROI_Schaefer_amy_", i))
+  tmp.aov <- summary(aov(data = current.data, 
+                   current.ROI.amyloid ~ TBI_status + Age_Amyloid_PET + 
+                      APOE_status + amyloid_global))
+  anova.summary.main.effect$fvals[i] = tmp.aov[[1]]["TBI_status", "F value"]
+  anova.summary.main.effect$pvals[i] = tmp.aov[[1]]["TBI_status", "Pr(>F)"]
+
+}
+
+anova.summary.main.effect$pvals_corrected <- p.adjust(anova.summary.main.effect$pvals, method = "BH")
+anova.summary.main.effect$fvals_corrected = anova.summary.main.effect$fvals * as.numeric(anova.summary.main.effect$pvals_corrected<0.05)
+
+### save plot file for editing in connectome workbench (using another dependency R file)
+
+tmp <- anova.summary.main.effect$fvals_corrected
+
+source("C:/rendering_function_17N.R")
+
+render_vector(tmp, "title", 200)
+
+### save significant regions of interest to be used later on
+
+anova.summary.main.effect$row_number <- seq_len(nrow(anova.summary.main.effect))
+significant_rows <- anova.summary.main.effect$pvals_corrected < 0.05
+filter_amyloid_mild_vs_modsev <- anova.summary.main.effect[significant_rows, ]
+
+amyloid_significant_rows <- filter_amyloid_mild_vs_modsev$row_number
+wo_no_amy <- amyloid_significant_rows
+
+```
+
+# assess TBI group (no/mild/moderate-severe) differences in average regional amyloid PET among significant ANCOVA associations from previous step
+
+```{r}
+
+## combination of ROIs
+
+combined_amy <- union(union(wo_modsev_amy, wo_mild_amy), wo_no_amy)
+combined_amy
+
+## create amyloid average
+
+amyloid <- ADNI_df %>% 
+  dplyr::select(starts_with("ROI_Schaefer_amy_"), SCRNO, TBI_status, cognitive_status_amy, Age_Amyloid_PET, APOE_status, amyloid_global) %>% 
+  rename_with(~ str_remove(., "ROI_Schaefer_amy_"), starts_with("ROI_Schaefer_amy_"))
+
+amyloid_subset <- amyloid[, c(combined_amy, "SCRNO", "TBI_status", "cognitive_status_amy", "Age_Amyloid_PET", "APOE_status", "amyloid_global")]
+row_means <- rowMeans(amyloid_subset[, !names(amyloid_subset) %in% c('SCRNO', 'TBI_status', 'cognitive_status_amy', 'Age_Amyloid_PET', 'APOE_status', 'amyloid_global')])
+amyloid_subset$row_means <- row_means
+
+## plot
+
+a1 <- ggplot(data = amyloid_subset, 
+             aes(x = factor(TBI_status), 
+                 y = row_means)) +
+  geom_boxplot(width = 0.4, notch = F, alpha = 0.5, fill = "#9c3333") +
+  geom_beeswarm(aes(shape = factor(cognitive_status_amy, levels = c("CN", "MCI"))), 
+                size = 4, 
+                alpha = 0.5, color = "#6e6e6e") +
+  scale_shape_manual(name = NULL, values = c(16, 17), labels = c("CN", "MCI")) +
+  theme_bw() + 
+  theme(legend.position = "none",
+        legend.text = element_text(size = 18), 
+        axis.text.x = element_text(size = 22),  
+        axis.text.y = element_text(size = 22),  
+        axis.ticks = element_line(), 
+        axis.title.x = element_text(size = 24),
+        axis.title.y = element_text(size = 24),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.title = element_text(size = 20, hjust = 0.5, face = "bold")) +
+  labs(title = "title",
+       subtitle = NULL,
+       x = NULL,
+       y = "Average amyloid-β PET SUVR",
+       fill = NULL) +
+  scale_x_discrete(limits = c("No TBI", "Mild TBI", "Moderate/severe TBI")) +
+  guides(shape = guide_legend(override.aes = list(size = 5, linetype = 0, fill = NA),
+                              nrow = 1,
+                              byrow = TRUE)) 
+
+## statistics
+
+tmp.aov <- aov(data = amyloid_subset,
+               row_means ~ TBI_status + Age_Amyloid_PET + 
+                 APOE_status + amyloid_global)
+
+summary(tmp.aov)
+
+TukeyHSD(tmp.aov, which = "TBI_status")
+
+```
+
+# assess mean differences between TBI groups in regional amyloid PET
+
+```{r}
+
+## no TBI vs TBI
+
+### find variable names matching the region pattern
+region_cols <- grep("^ROI_Schaefer_amy_", names(ADNI_df))
+
+### calculate mean difference for each brain region
+mean_diff_amyloid <- vector(length = length(region_cols))
+
+for (i in 1:length(region_cols)) {
+    No_TBI <- ADNI_df[ADNI_df$TBI_yn == "No_TBI", region_cols[i]]
+    TBI <- ADNI_df[ADNI_df$TBI_yn == "TBI", region_cols[i]]
+    mean_diff_amyloid[i] <- mean(TBI) - mean(No_TBI)
+    
+}
+
+View(mean_diff_amyloid)
+
+negative_count <- sum(mean_diff_amyloid < 0)
+print(negative_count)
+
+mean_diff_amyloid <- as.data.frame(mean_diff_amyloid)
+mean_diff_amyloid$row_number <- seq_len(nrow(mean_diff_amyloid))
+specific_rows <- filter_amyloid_yesno$row_number
+data_columns <- colnames(mean_diff_amyloid)
+mean_diff_amyloid[!(mean_diff_amyloid$row_number %in% specific_rows), data_columns] <- 0
+mean_diff_amyloid$row_number <- NULL
+mean_diff_amyloid <- as.data.frame(mean_diff_amyloid)
+
+### save plot file for editing in connectome workbench (using another dependency R file)
+
+source("C:/rendering_function_17N.R")
+
+render_vector(mean_diff_amyloid, "title", 200)
+
+## no TBI vs mild TBI
+
+### find variable names matching the region pattern
+region_cols <- grep("^ROI_Schaefer_amy_", names(ADNI_df))
+
+### calculate mean difference for each brain region
+mean_diff_amyloid <- vector(length = length(region_cols))
+
+for (i in 1:length(region_cols)) {
+    No_TBI <- ADNI_df[ADNI_df$TBI_status == "No_TBI", region_cols[i]]
+    Mild_TBI <- ADNI_df[ADNI_df$TBI_status == "Mild_TBI", region_cols[i]]
+    mean_diff_amyloid[i] <- mean(Mild_TBI) - mean(No_TBI)
+    
+}
+
+View(mean_diff_amyloid)
+
+negative_count <- sum(mean_diff_amyloid < 0)
+print(negative_count)
+
+mean_diff_amyloid <- as.data.frame(mean_diff_amyloid)
+mean_diff_amyloid$row_number <- seq_len(nrow(mean_diff_amyloid))
+specific_rows <- filter_amyloid_no_vs_mild$row_number
+data_columns <- colnames(mean_diff_amyloid)
+mean_diff_amyloid[!(mean_diff_amyloid$row_number %in% specific_rows), data_columns] <-0
+mean_diff_amyloid$row_number <- NULL
+mean_diff_amyloid <- as.data.frame(mean_diff_amyloid)
+
+### save plot file for editing in connectome workbench (using another dependency R file)
+
+source("C:/rendering_function_17N.R")
+
+render_vector(mean_diff_amyloid, "title", 200)
+
+## no TBI vs moderate/severe TBI
+
+### find variable names matching the region pattern
+region_cols <- grep("^ROI_Schaefer_amy_", names(ADNI_df))
+
+### calculate mean difference for each brain region
+mean_diff_amyloid <- vector(length = length(region_cols))
+
+for (i in 1:length(region_cols)) {
+    No_TBI <- ADNI_df[ADNI_df$TBI_status == "No_TBI", region_cols[i]]
+    Moderate_severe_TBI <- ADNI_df[ADNI_df$TBI_status == "Moderate_severe_TBI", region_cols[i]]
+    mean_diff_amyloid[i] <- mean(Moderate_severe_TBI) - mean(No_TBI)
+    
+}
+
+View(mean_diff_amyloid)
+
+negative_count <- sum(mean_diff_amyloid < 0)
+print(negative_count)
+
+mean_diff_amyloid <- as.data.frame(mean_diff_amyloid)
+mean_diff_amyloid$row_number <- seq_len(nrow(mean_diff_amyloid))
+specific_rows <- filter_amyloid_no_vs_modsev$row_number
+data_columns <- colnames(mean_diff_amyloid)
+mean_diff_amyloid[!(mean_diff_amyloid$row_number %in% specific_rows), data_columns] <- 0
+mean_diff_amyloid$row_number <- NULL
+mean_diff_amyloid <- as.data.frame(mean_diff_amyloid)
+
+### save plot file for editing in connectome workbench (using another dependency R file)
+
+source("C:/rendering_function_17N.R")
+
+render_vector(mean_diff_amyloid, "title", 200)
+
+## mild TBI vs moderate/severe TBI
+
+### find variable names matching the region pattern
+region_cols <- grep("^ROI_Schaefer_amy_", names(ADNI_df))
+
+### calculate mean difference for each brain region
+mean_diff_amyloid <- vector(length = length(region_cols))
+
+for (i in 1:length(region_cols)) {
+    Mild_TBI <- ADNI_df[ADNI_df$TBI_status == "Mild_TBI", region_cols[i]]
+    Moderate_severe_TBI <- ADNI_df[ADNI_df$TBI_status == "Moderate_severe_TBI", region_cols[i]]
+    mean_diff_amyloid[i] <- mean(Moderate_severe_TBI) - mean(Mild_TBI)
+    
+}
+
+View(mean_diff_amyloid)
+
+negative_count <- sum(mean_diff_amyloid < 0)
+print(negative_count)
+
+mean_diff_amyloid <- as.data.frame(mean_diff_amyloid)
+mean_diff_amyloid$row_number <- seq_len(nrow(mean_diff_amyloid))
+specific_rows <- filter_amyloid_mild_vs_modsev$row_number
+data_columns <- colnames(mean_diff_amyloid)
+mean_diff_amyloid[!(mean_diff_amyloid$row_number %in% specific_rows), data_columns] <- 0
+mean_diff_amyloid$row_number <- NULL
+mean_diff_amyloid <- as.data.frame(mean_diff_amyloid)
+
+### save plot file for editing in connectome workbench (using another dependency R file)
+
+source("C:/rendering_function_17N.R")
+
+render_vector(mean_diff_amyloid, "title", 200)
+
+```
+
+# assess mean differences between TBI groups in regional tau PET
+
+```{r}
+
+## no TBI vs TBI
+
+### find variable names matching the region pattern
+region_cols <- grep("^ROI_Schaefer_tau_", names(ADNI_df))
+
+### calculate mean difference for each brain region
+mean_diff_tau <- vector(length = length(region_cols))
+
+for (i in 1:length(region_cols)) {
+    No_TBI <- ADNI_df[ADNI_df$TBI_yn == "No_TBI", region_cols[i]]
+    TBI <- ADNI_df[ADNI_df$TBI_yn == "TBI", region_cols[i]]
+    mean_diff_tau[i] <- mean(TBI) - mean(No_TBI)
+    
+}
+
+View(mean_diff_tau)
+
+negative_count <- sum(mean_diff_tau < 0)
+print(negative_count)
+
+mean_diff_tau <- as.data.frame(mean_diff_tau)
+mean_diff_tau$row_number <- seq_len(nrow(mean_diff_tau))
+specific_rows <- tau_filtered_ancova_yesno$row_number
+data_columns <- colnames(mean_diff_tau)
+mean_diff_tau[!(mean_diff_tau$row_number %in% specific_rows), data_columns] <- 0
+mean_diff_tau$row_number <- NULL
+mean_diff_tau <- as.data.frame(mean_diff_tau)
+
+### save plot file for editing in connectome workbench (using another dependency R file)
+
+source("C:/rendering_function_17N.R")
+
+render_vector(mean_diff_tau, "title", 200)
+
+## no TBI vs mild TBI
+
+### find variable names matching the region pattern
+region_cols <- grep("^ROI_Schaefer_tau_", names(ADNI_df))
+
+### calculate mean difference for each brain region
+mean_diff_tau <- vector(length = length(region_cols))
+
+for (i in 1:length(region_cols)) {
+    No_TBI <- ADNI_df[ADNI_df$TBI_status == "No_TBI", region_cols[i]]
+    Mild_TBI <- ADNI_df[ADNI_df$TBI_status == "Mild_TBI", region_cols[i]]
+    mean_diff_tau[i] <- mean(Mild_TBI) - mean(No_TBI)
+    
+}
+
+View(mean_diff_tau)
+
+negative_count <- sum(mean_diff_tau < 0)
+print(negative_count)
+
+mean_diff_tau <- as.data.frame(mean_diff_tau)
+mean_diff_tau$row_number <- seq_len(nrow(mean_diff_tau))
+specific_rows <- tau_filtered_ancova_no_vs_mild$row_number
+data_columns <- colnames(mean_diff_tau)
+mean_diff_tau[!(mean_diff_tau$row_number %in% specific_rows), data_columns] <- 0
+mean_diff_tau$row_number <- NULL
+mean_diff_tau <- as.data.frame(mean_diff_tau)
+
+### save plot file for editing in connectome workbench (using another dependency R file)
+
+source("C:/rendering_function_17N.R")
+
+render_vector(mean_diff_tau, "title", 200)
+
+## no TBI vs moderate/severe TBI
+
+### find variable names matching the region pattern
+region_cols <- grep("^ROI_Schaefer_tau_", names(ADNI_df))
+
+### calculate mean difference for each brain region
+mean_diff_tau <- vector(length = length(region_cols))
+
+for (i in 1:length(region_cols)) {
+    No_TBI <- ADNI_df[ADNI_df$TBI_status == "No_TBI", region_cols[i]]
+    Moderate_severe_TBI <- ADNI_df[ADNI_df$TBI_status == "Moderate_severe_TBI", region_cols[i]]
+    mean_diff_tau[i] <- mean(Moderate_severe_TBI) - mean(No_TBI)
+    
+}
+
+View(mean_diff_tau)
+
+negative_count <- sum(mean_diff_tau < 0)
+print(negative_count)
+
+mean_diff_tau <- as.data.frame(mean_diff_tau)
+mean_diff_tau$row_number <- seq_len(nrow(mean_diff_tau))
+specific_rows <- tau_filtered_ancova_no_vs_modsev$row_number
+data_columns <- colnames(mean_diff_tau)
+mean_diff_tau[!(mean_diff_tau$row_number %in% specific_rows), data_columns] <- 0
+mean_diff_tau$row_number <- NULL
+mean_diff_tau <- as.data.frame(mean_diff_tau)
+
+### save plot file for editing in connectome workbench (using another dependency R file)
+
+source("C:/rendering_function_17N.R")
+
+render_vector(mean_diff_tau, "title", 200)
+
+## mild TBI vs moderate/severe TBI
+
+### find variable names matching the region pattern
+region_cols <- grep("^ROI_Schaefer_tau_", names(ADNI_df))
+
+### calculate mean difference for each brain region
+mean_diff_tau <- vector(length = length(region_cols))
+
+for (i in 1:length(region_cols)) {
+    Mild_TBI <- ADNI_df[ADNI_df$TBI_status == "Mild_TBI", region_cols[i]]
+    Moderate_severe_TBI <- ADNI_df[ADNI_df$TBI_status == "Moderate_severe_TBI", region_cols[i]]
+    mean_diff_tau[i] <- mean(Moderate_severe_TBI) - mean(Mild_TBI)
+    
+}
+
+View(mean_diff_tau)
+
+negative_count <- sum(mean_diff_tau < 0)
+print(negative_count)
+
+mean_diff_tau <- as.data.frame(mean_diff_tau)
+mean_diff_tau$row_number <- seq_len(nrow(mean_diff_tau))
+specific_rows <- tau_filtered_ancova_mild_vs_modsev$row_number
+data_columns <- colnames(mean_diff_tau)
+mean_diff_tau[!(mean_diff_tau$row_number %in% specific_rows), data_columns] <- 0
+mean_diff_tau$row_number <- NULL
+mean_diff_tau <- as.data.frame(mean_diff_tau)
+
+### save plot file for editing in connectome workbench (using another dependency R file)
+
+source("C:/rendering_function_17N.R")
+
+render_vector(mean_diff_tau, "title", 200)
+
+```
+
+# assess interaction between regional amyloid and TBI status (yes/no) on regional tau
+
+```{r}
+
+## statistics
+
+ADNI_df$TBI_yn <- mapvalues(ADNI_df$TBI_yn, from=c("No_TBI", "TBI"), to=c(1, 2))
+ADNI_df$TBI_yn <- as.numeric(ADNI_df$TBI_yn)
+
+regression.summary = data.frame(tvals = rep(NA, 200), pvals = rep(NA, 200))
+
+for (i in 1:200){
+  eq = paste0("ROI_Schaefer_tau_", i, " ~ ROI_Schaefer_amy_", i, "*TBI_yn + Age_Tau_PET + 
+                      APOE_status + tau_global + time_lag_tau_amyloid_PET")
+  tmp.lm <- summary(lm(data = ADNI_df, formula = eq))
+  regression.summary$tvals[i] = tmp.lm$coefficients[paste0("ROI_Schaefer_amy_", i, ":TBI_yn"), "t value"]
+  regression.summary$pvals[i] = tmp.lm$coefficients[paste0("ROI_Schaefer_amy_", i, ":TBI_yn"), "Pr(>|t|)"]
+
+}
+
+regression.summary$pvals_corrected <- p.adjust(regression.summary$pvals, method = "BH")
+regression.summary$tvals_corrected = regression.summary$tvals * as.numeric(regression.summary$pvals_corrected<0.05)
+
+## save plot file for editing in connectome workbench (using another dependency R file)
+
+tmp <- regression.summary$tvals_corrected
+
+source("C:/rendering_function_17N.R")
+
+render_vector(tmp, "title", 200)
+
+```
+
+# assess interaction between regional amyloid and TBI status (no/mild/moderate-severe) on regional tau
+
+```{r}
+
+## no TBI vs mild TBI
+
+### statistics
+
+wo_modsev$TBI_status <- mapvalues(wo_modsev$TBI_status, from=c("No_TBI", "Mild_TBI"), to=c(1, 2))
+wo_modsev$TBI_status <- as.numeric(wo_modsev$TBI_status)
+
+regression.summary = data.frame(tvals = rep(NA, 200), pvals = rep(NA, 200))
+
+for (i in 1:200){
+  eq = paste0("ROI_Schaefer_tau_", i, " ~ ROI_Schaefer_amy_", i, "*TBI_status + Age_Tau_PET + 
+                      APOE_status + tau_global + time_lag_tau_amyloid_PET")
+  tmp.lm <- summary(lm(data = wo_modsev, formula = eq))
+  regression.summary$tvals[i] = tmp.lm$coefficients[paste0("ROI_Schaefer_amy_", i, ":TBI_status"), "t value"]
+  regression.summary$pvals[i] = tmp.lm$coefficients[paste0("ROI_Schaefer_amy_", i, ":TBI_status"), "Pr(>|t|)"]
+
+}
+
+regression.summary$pvals_corrected <- p.adjust(regression.summary$pvals, method = "BH")
+regression.summary$tvals_corrected = regression.summary$tvals * as.numeric(regression.summary$pvals_corrected<0.05)
+
+regression.summary$row_number <- seq_len(nrow(regression.summary))
+significant_rows_pos <- regression.summary$pvals_corrected < 0.05 & regression.summary$tvals_corrected > 0
+significant_rows_neg <- regression.summary$pvals_corrected < 0.05 & regression.summary$tvals_corrected < 0
+
+interaction_significant_rows_pos <- regression.summary[significant_rows_pos, ]
+interaction_significant_rows_pos <- interaction_significant_rows_pos$row_number
+
+interaction_significant_rows_neg <- regression.summary[significant_rows_neg, ]
+interaction_significant_rows_neg <- interaction_significant_rows_neg$row_number
+
+wo_modsev_pos <- interaction_significant_rows_pos
+wo_modsev_neg <- interaction_significant_rows_neg
+
+### save plot file for editing in connectome workbench (using another dependency R file)
+
+source("C:/rendering_function_17N.R")
+
+render_vector(regression.summary$tvals_corrected, "title", 200)
+
+## no TBI vs moderate/severe TBI
+
+### statistics
+
+wo_mild$TBI_status <- mapvalues(wo_mild$TBI_status, from=c("No_TBI", "Moderate_severe_TBI"), to=c(1, 3))
+wo_mild$TBI_status <- as.numeric(wo_mild$TBI_status)
+
+regression.summary = data.frame(tvals = rep(NA, 200), pvals = rep(NA, 200))
+
+for (i in 1:200){
+  eq = paste0("ROI_Schaefer_tau_", i, " ~ ROI_Schaefer_amy_", i, "*TBI_status + Age_Tau_PET + 
+                      APOE_status + tau_global + time_lag_tau_amyloid_PET")
+  tmp.lm <- summary(lm(data = wo_mild, formula = eq))
+  regression.summary$tvals[i] = tmp.lm$coefficients[paste0("ROI_Schaefer_amy_", i, ":TBI_status"), "t value"]
+  regression.summary$pvals[i] = tmp.lm$coefficients[paste0("ROI_Schaefer_amy_", i, ":TBI_status"), "Pr(>|t|)"]
+
+}
+
+regression.summary$pvals_corrected <- p.adjust(regression.summary$pvals, method = "BH")
+regression.summary$tvals_corrected = regression.summary$tvals * as.numeric(regression.summary$pvals_corrected<0.05)
+
+regression.summary$row_number <- seq_len(nrow(regression.summary))
+significant_rows_pos <- regression.summary$pvals_corrected < 0.05 & regression.summary$tvals_corrected > 0
+significant_rows_neg <- regression.summary$pvals_corrected < 0.05 & regression.summary$tvals_corrected < 0
+
+interaction_significant_rows_pos <- regression.summary[significant_rows_pos, ]
+interaction_significant_rows_pos <- interaction_significant_rows_pos$row_number
+
+interaction_significant_rows_neg <- regression.summary[significant_rows_neg, ]
+interaction_significant_rows_neg <- interaction_significant_rows_neg$row_number
+
+wo_mild_pos <- interaction_significant_rows_pos
+wo_mild_neg <- interaction_significant_rows_neg
+
+### save plot file for editing in connectome workbench (using another dependency R file)
+
+source("C:/rendering_function_17N.R")
+
+render_vector(regression.summary$tvals_corrected, "title", 200)
+
+## mild TBI vs moderate/severe TBI
+
+### statistics
+
+wo_no$TBI_status <- mapvalues(wo_no$TBI_status, from=c("Mild_TBI", "Moderate_severe_TBI"), to=c(2, 3))
+wo_no$TBI_status <- as.numeric(wo_no$TBI_status)
+
+regression.summary = data.frame(tvals = rep(NA, 200), pvals = rep(NA, 200))
+
+for (i in 1:200){
+  eq = paste0("ROI_Schaefer_tau_", i, " ~ ROI_Schaefer_amy_", i, "*TBI_status + Age_Tau_PET + 
+                      APOE_status + tau_global + time_lag_tau_amyloid_PET")
+  tmp.lm <- summary(lm(data = wo_no, formula = eq))
+  regression.summary$tvals[i] = tmp.lm$coefficients[paste0("ROI_Schaefer_amy_", i, ":TBI_status"), "t value"]
+  regression.summary$pvals[i] = tmp.lm$coefficients[paste0("ROI_Schaefer_amy_", i, ":TBI_status"), "Pr(>|t|)"]
+
+}
+
+regression.summary$pvals_corrected <- p.adjust(regression.summary$pvals, method = "BH")
+regression.summary$tvals_corrected = regression.summary$tvals * as.numeric(regression.summary$pvals_corrected<0.05)
+
+regression.summary$row_number <- seq_len(nrow(regression.summary))
+significant_rows_pos <- regression.summary$pvals_corrected < 0.05 & regression.summary$tvals_corrected > 0
+significant_rows_neg <- regression.summary$pvals_corrected < 0.05 & regression.summary$tvals_corrected < 0
+
+interaction_significant_rows_pos <- regression.summary[significant_rows_pos, ]
+interaction_significant_rows_pos <- interaction_significant_rows_pos$row_number
+
+interaction_significant_rows_neg <- regression.summary[significant_rows_neg, ]
+interaction_significant_rows_neg <- interaction_significant_rows_neg$row_number
+
+wo_no_pos <- interaction_significant_rows_pos
+wo_no_neg <- interaction_significant_rows_neg
+
+### save plot file for editing in connectome workbench (using another dependency R file)
+
+source("C:/rendering_function_17N.R")
+
+render_vector(regression.summary$tvals_corrected, "title", 200)
+
+```
+
+# assess interaction between average regional amyloid PET and TBI status (no/mild/moderate-severe) on average regional tau PET among significant regression associations from previous step
+
+```{r}
+
+## combination of positive and negative ROIs
+
+### positive
+
+combined_pos <- c(wo_modsev_pos, wo_mild_pos, wo_no_pos)
+
+### negative
+
+combined_neg <- union(wo_modsev_neg, union(wo_mild_neg, wo_no_neg))
+
+## create amyloid and tau average
+
+interaction_amy <- ADNI_df %>% 
+  dplyr::select(starts_with("ROI_Schaefer_amy_"), TBI_status, cognitive_status_amy, SCRNO) %>% 
+  rename_with(~ str_remove(., "ROI_Schaefer_amy_"), starts_with("ROI_Schaefer_amy_"))
+
+interaction_tau <- ADNI_df %>% 
+  dplyr::select(starts_with("ROI_Schaefer_tau_"), TBI_status, cognitive_status_tau, SCRNO, Age_Tau_PET, APOE_status, tau_global, time_lag_tau_amyloid_PET) %>% 
+  rename_with(~ str_remove(., "ROI_Schaefer_tau_"), starts_with("ROI_Schaefer_tau_"))
+
+pos_interaction_amy_subset <- interaction_amy[, c(combined_pos, "TBI_status", "cognitive_status_amy", "SCRNO")]
+row_means <- rowMeans(pos_interaction_amy_subset[, !names(pos_interaction_amy_subset) %in% c('TBI_status', 'cognitive_status_amy', 'SCRNO')])
+pos_interaction_amy_subset$row_means <- row_means
+
+pos_interaction_tau_subset <- interaction_tau[, c(combined_pos, "TBI_status", "cognitive_status_tau", "SCRNO", "Age_Tau_PET", "APOE_status", "tau_global", "time_lag_tau_amyloid_PET")]
+row_means <- rowMeans(pos_interaction_tau_subset[, !names(pos_interaction_tau_subset) %in% c('TBI_status', 'cognitive_status_tau', 'SCRNO', 'Age_Tau_PET', 'APOE_status', 'tau_global', 'time_lag_tau_amyloid_PET')])
+pos_interaction_tau_subset$row_means <- row_means
+
+neg_interaction_amy_subset <- interaction_amy[, c(combined_neg, "TBI_status", "cognitive_status_amy", "SCRNO")]
+row_means <- rowMeans(neg_interaction_amy_subset[, !names(neg_interaction_amy_subset) %in% c('TBI_status', 'cognitive_status_amy', 'SCRNO')])
+neg_interaction_amy_subset$row_means <- row_means
+
+neg_interaction_tau_subset <- interaction_tau[, c(combined_neg, "TBI_status", "cognitive_status_tau", "SCRNO", "Age_Tau_PET", "APOE_status", "tau_global", "time_lag_tau_amyloid_PET")]
+row_means <- rowMeans(neg_interaction_tau_subset[, !names(neg_interaction_tau_subset) %in% c('TBI_status', 'cognitive_status_tau', 'SCRNO', 'Age_Tau_PET', 'APOE_status', 'tau_global', 'time_lag_tau_amyloid_PET')])
+neg_interaction_tau_subset$row_means <- row_means
+
+pos_interaction_combined <- merge(pos_interaction_tau_subset, pos_interaction_amy_subset, 
+                                  by = c("SCRNO", "TBI_status"),
+                                  suffixes = c("_tau", "_amy"),
+                                  all.x=T)
+
+neg_interaction_combined <- merge(neg_interaction_tau_subset, neg_interaction_amy_subset, 
+                                  by = c("SCRNO", "TBI_status"),
+                                  suffixes = c("_tau", "_amy"),
+                                  all.x=T)
+
+## positive plot
+
+pos_interaction_combined$TBI_status <- factor(pos_interaction_combined$TBI_status, 
+                                                levels = c("No TBI", "Mild TBI", "Moderate/severe TBI"))
+
+at_pos <- ggplot() +
+  geom_point(aes(x = pos_interaction_combined$row_means_amy, y = pos_interaction_combined$row_means_tau, color = pos_interaction_combined$TBI_status, shape = pos_interaction_combined$cognitive_status_tau),size = 4) +                                  
+  geom_smooth(aes(x = pos_interaction_combined$row_means_amy, y = pos_interaction_combined$row_means_tau, color = pos_interaction_combined$TBI_status), method = "lm", se = FALSE, formula = y ~ x, linewidth = 1.4) +   
+  scale_color_manual(values = c("#78c478", "#89aede", "#d68a8a")) + 
+  scale_shape_manual(values = c("CN" = 16, "MCI" = 17)) +
+  labs(title = "title", 
+       x = "Average amyloid-β PET SUVR", 
+       y = "Average tau-PET SUVR", 
+       color = "TBI status",
+       shape = "Cognitive status") +                          
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 15, hjust=0.5, face = "bold"),  
+    axis.title.x = element_text(size = 24),               
+    axis.title.y = element_text(size = 24),               
+    legend.title = element_text(size = 14),              
+    legend.text = element_text(size = 12, color = "#6e6e6e"),                
+    axis.text = element_text(size = 22),
+    legend.position = "none"                  
+  ) +
+  guides(shape = guide_legend(override.aes = list(size = 5, color = "#6e6e6e")))  
+
+## negative plot
+
+neg_interaction_combined$TBI_status <- factor(neg_interaction_combined$TBI_status, 
+                                                levels = c("No TBI", "Mild TBI", "Moderate/severe TBI"))
+
+at_neg <- ggplot() +
+  geom_point(aes(x = neg_interaction_combined$row_means_amy, y = neg_interaction_combined$row_means_tau, color = neg_interaction_combined$TBI_status, shape = neg_interaction_combined$cognitive_status_tau),size = 4) +                                  
+  geom_smooth(aes(x = neg_interaction_combined$row_means_amy, y = neg_interaction_combined$row_means_tau, color = neg_interaction_combined$TBI_status), method = "lm", se = FALSE, formula = y ~ x, linewidth = 1.4) +   
+  scale_color_manual(values = c("#78c478", "#89aede", "#d68a8a")) + 
+  scale_shape_manual(values = c("CN" = 16, "MCI" = 17)) +
+  labs(title = "title", 
+       x = "Average amyloid-β PET SUVR", 
+       y = "Average tau-PET SUVR", 
+       color = "TBI status",
+       shape = "Cognitive status") +                          
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 15, hjust=0.5, face = "bold"),  
+    axis.title.x = element_text(size = 24),               
+    axis.title.y = element_text(size = 24),               
+    legend.title = element_text(size = 14),              
+    legend.text = element_text(size = 12, color = "#6e6e6e"),                
+    axis.text = element_text(size = 22),
+    legend.position = "none"                  
+  ) +
+  guides(shape = guide_legend(override.aes = list(size = 5, color = "#6e6e6e")))
+
+## statistics
+
+### positive
+
+pos_interaction_combined$TBI_status <- mapvalues(pos_interaction_combined$TBI_status,
+                                                         from = c("No TBI", "Mild TBI", "Moderate/severe TBI"),
+                                                         to = c(0, 1, 2))
+pos_interaction_combined$TBI_status <- as.numeric(pos_interaction_combined$TBI_status)
+
+lm1 <- summary(lm(row_means_tau ~ row_means_amy * TBI_status + Age_Tau_PET + 
+                    APOE_status + tau_global + time_lag_tau_amyloid_PET, data = pos_interaction_combined))
+
+lm1
+
+### negative
+
+neg_interaction_combined$TBI_status <- mapvalues(neg_interaction_combined$TBI_status,
+                                                 from = c("No TBI", "Mild TBI", "Moderate/severe TBI"),
+                                                 to = c(0, 1, 2))
+neg_interaction_combined$TBI_status <- as.numeric(neg_interaction_combined$TBI_status)
+
+lm1 <- summary(lm(row_means_tau ~ row_means_amy * TBI_status + Age_Tau_PET + 
+                    APOE_status + tau_global + time_lag_tau_amyloid_PET, data = neg_interaction_combined))
+
+lm1
+
+```
+
+# establish tau epicenters
+
+```{r}
+
+## no TBI
+
+DXoi <- c("No_TBI")
+
+tau <- ADNI_df %>% 
+  filter(TBI_status == DXoi) %>% 
+  dplyr::select(starts_with("ROI_Schaefer_tau_"))
+
+tau <- as.matrix(tau)
+
+tau_epicenters = matrix(data = 0, nrow = nrow(tau), ncol = ncol(tau))
+
+### determine epicenter ntile
+epi_ntile = 10
+
+### determine epicenters
+for (i in 1:nrow(tau)){tau_epicenters[i,which(ntile(as.numeric(tau[i,]), epi_ntile) == epi_ntile)] = 1}
+
+tmp.df = data.frame(tau_epicenters)
+tmp.df$TBI_status <- "No_TBI"
+
+tmp.df.no.TBI <- tmp.df
+
+### create 
+tmp.df.mean <- tmp.df %>% 
+  filter(TBI_status %in% DXoi) %>% 
+  group_by(TBI_status) %>% 
+  dplyr::select(paste0("X", 1:200)) %>% 
+  dplyr::summarize(across(everything(), mean))
+
+for (i in 1:nrow(tmp.df.mean)){
+  current.tau <- as.numeric(tmp.df.mean[i, paste0("X", 1:200)])
+  source("C:/rendering_function_17N.R")
+  render_vector(current.tau, "title", 200)
+  
+}
+
+## mild TBI
+
+DXoi <- c("Mild_TBI")
+
+tau <- ADNI_df %>% 
+  filter(TBI_status == DXoi) %>% 
+  dplyr::select(starts_with("ROI_Schaefer_tau_"))
+
+tau <- as.matrix(tau)
+
+tau_epicenters = matrix(data = 0, nrow = nrow(tau), ncol = ncol(tau))
+
+### determine epicenter ntile
+epi_ntile = 10
+
+### determine epicenters
+for (i in 1:nrow(tau)){tau_epicenters[i,which(ntile(as.numeric(tau[i,]), epi_ntile) == epi_ntile)] = 1}
+
+tmp.df = data.frame(tau_epicenters)
+tmp.df$TBI_status <- "Mild_TBI"
+
+tmp.df.mild.TBI <- tmp.df
+
+### create 
+tmp.df.mean <- tmp.df %>% 
+  filter(TBI_status %in% DXoi) %>% 
+  group_by(TBI_status) %>% 
+  dplyr::select(paste0("X", 1:200)) %>% 
+  dplyr::summarize(across(everything(), mean))
+
+for (i in 1:nrow(tmp.df.mean)){
+  current.tau <- as.numeric(tmp.df.mean[i, paste0("X", 1:200)])
+  source("C:/rendering_function_17N.R")
+  render_vector(current.tau, "title", 200)
+  
+}
+
+## moderate/severe TBI
+
+DXoi <- c("Moderate_severe_TBI")
+
+tau <- ADNI_df %>% 
+  filter(TBI_status == DXoi) %>% 
+  dplyr::select(starts_with("ROI_Schaefer_tau_"))
+
+tau <- as.matrix(tau)
+
+tau_epicenters = matrix(data = 0, nrow = nrow(tau), ncol = ncol(tau))
+
+### determine epicenter ntile
+epi_ntile = 10
+
+### determine epicenters
+for (i in 1:nrow(tau)){tau_epicenters[i,which(ntile(as.numeric(tau[i,]), epi_ntile) == epi_ntile)] = 1}
+
+tmp.df = data.frame(tau_epicenters)
+tmp.df$TBI_status <- "Moderate_severe_TBI"
+
+tmp.df.modsev.TBI <- tmp.df
+
+### create 
+tmp.df.mean <- tmp.df %>% 
+  filter(TBI_status %in% DXoi) %>% 
+  group_by(TBI_status) %>% 
+  dplyr::select(paste0("X", 1:200)) %>% 
+  dplyr::summarize(across(everything(), mean))
+
+for (i in 1:nrow(tmp.df.mean)){
+  current.tau <- as.numeric(tmp.df.mean[i, paste0("X", 1:200)])
+  source("C:/rendering_function_17N.R")
+  render_vector(current.tau, "title", 200)
+  
+}
+
+## TBI
+
+ADNI_df$TBI_yn <- mapvalues(ADNI_df$TBI_yn, from=c(1, 2), to=c("No_TBI", "TBI"))
+
+DXoi <- c("TBI")
+
+tau <- ADNI_df %>% 
+  filter(TBI_yn == DXoi) %>% 
+  dplyr::select(starts_with("ROI_Schaefer_tau_"))
+
+tau <- as.matrix(tau)
+
+tau_epicenters = matrix(data = 0, nrow = nrow(tau), ncol = ncol(tau))
+
+### determine epicenter ntile
+epi_ntile = 10
+
+### determine epicenters
+for (i in 1:nrow(tau)){tau_epicenters[i,which(ntile(as.numeric(tau[i,]), epi_ntile) == epi_ntile)] = 1}
+
+tmp.df = data.frame(tau_epicenters)
+tmp.df$TBI_status <- "TBI"
+
+tmp.df.TBI <- tmp.df
+
+### create 
+tmp.df.mean <- tmp.df %>% 
+  filter(TBI_status %in% DXoi) %>% 
+  group_by(TBI_status) %>% 
+  dplyr::select(paste0("X", 1:200)) %>% 
+  dplyr::summarize(across(everything(), mean))
+
+for (i in 1:nrow(tmp.df.mean)){
+  current.tau <- as.numeric(tmp.df.mean[i, paste0("X", 1:200)])
+  source("C:/rendering_function_17N.R")
+  render_vector(current.tau, "title", 200)
+  
+}
+
+```
