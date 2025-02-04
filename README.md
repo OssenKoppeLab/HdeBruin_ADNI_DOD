@@ -1,9 +1,10 @@
 **In this folder you can find the R code for our manuscript 'Amyloid-β and tau deposition in traumatic brain injury: A study of Vietnam War veterans'**
 
-**The code loads locally processed amyloid-PET and tau-PET data (within 200 Schaefer regions) from ADNI DOD for 103 male Vietnam War veterans, combined with demographic and clinical data coming from various ADNI DOD files:
-PTDEMOG.csv
-APOERES.csv
-TELSCRN.csv
+The code loads locally processed amyloid-PET and tau-PET data (within 200 Schaefer regions) from ADNI DOD for 103 male Vietnam War veterans, combined with demographic and clinical data coming from various ADNI DOD files:
+
+# PTDEMOG.csv
+# APOERES.csv
+# TELSCRN.csv
 TBISERIES.csv
 TBISRIESFU.csv
 RECTBIINJ.csv
